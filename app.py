@@ -44,6 +44,33 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+# Injection JS pour forcer le favicon dans le <head> du document parent.
+# Nécessaire car Streamlit Cloud ignore page_icon avec URL externe et sert son favicon par défaut.
+st.markdown(
+    f"""
+    <script>
+    (function() {{
+        try {{
+            var doc = window.parent && window.parent.document ? window.parent.document : document;
+            var existing = doc.querySelectorAll("link[rel*='icon']");
+            existing.forEach(function(el) {{ el.parentNode.removeChild(el); }});
+            var link = doc.createElement('link');
+            link.rel = 'icon';
+            link.type = 'image/png';
+            link.href = '{FAVICON_URL}';
+            doc.head.appendChild(link);
+            var shortcut = doc.createElement('link');
+            shortcut.rel = 'shortcut icon';
+            shortcut.type = 'image/png';
+            shortcut.href = '{FAVICON_URL}';
+            doc.head.appendChild(shortcut);
+        }} catch(e) {{ console.log('favicon override:', e); }}
+    }})();
+    </script>
+    """,
+    unsafe_allow_html=True,
+)
+
 
 # ───────────────────────── Doctrine visuelle (skill dashboard-finance) ─────────────────────────
 # Palette : neutre par défaut, accent unique pour l'information critique.
@@ -306,7 +333,7 @@ with st.sidebar:
     st.markdown('<hr style="margin:0.8rem 0 0.6rem 0;">', unsafe_allow_html=True)
     page = st.radio(
         "Navigation",
-        ["Lancer un screening", "Consulter un run", "À propos"],
+        ["Lancer un screening", "À propos"],
         label_visibility="collapsed",
     )
     st.markdown('<hr style="margin:1rem 0 0.6rem 0;">', unsafe_allow_html=True)
