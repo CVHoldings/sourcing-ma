@@ -163,20 +163,34 @@ h3, .stMarkdown h3 {
   font-size: 0.9rem;
 }
 
-/* Espace au-dessus du contenu de chaque onglet pour éviter chevauchement avec l'expander */
-.stTabs [data-baseweb="tab-panel"] {
-  padding-top: 1rem;
+/* Espace généreux au-dessus du contenu de chaque onglet (multi-sélecteurs robustes
+   pour couvrir plusieurs versions de Streamlit local + Cloud). */
+.stTabs [data-baseweb="tab-panel"],
+.stTabs > div > div > div > div,
+div[role="tabpanel"] {
+  padding-top: 2rem !important;
+  margin-top: 0.5rem !important;
 }
 
-/* L'expander de téléchargement comptes annuels — un peu plus de marge */
-[data-testid="stExpander"] {
-  margin: 0.6rem 0 1.2rem 0;
+/* Expanders — marge prononcée pour éviter chevauchement avec le titre du tab */
+[data-testid="stExpander"],
+.streamlit-expander,
+details {
+  margin-top: 1.5rem !important;
+  margin-bottom: 1.5rem !important;
 }
 
-[data-testid="stExpander"] summary {
+[data-testid="stExpander"] summary,
+details summary {
   font-weight: 500;
   color: var(--brand);
   font-size: 0.92rem;
+  padding: 0.5rem 0;
+}
+
+/* Espacement entre les sections markdown et les widgets qui suivent */
+div[data-testid="stMarkdownContainer"] + div[data-testid="stExpander"] {
+  margin-top: 1.8rem !important;
 }
 
 .stTabs [aria-selected="true"] {
@@ -652,7 +666,10 @@ if page == "Lancer un screening":
                 st.info("Aucune cible ne passe l'ensemble des filtres. "
                         "Élargissez les critères financiers ou l'âge minimum.")
             else:
-                # Bandeau téléchargement comptes — compact, au-dessus du tableau pour bonne visibilité
+                # Spacer HTML explicite pour garantir qu'il n'y a pas de chevauchement
+                # avec la barre d'onglets, indépendamment du CSS
+                st.markdown('<div style="height:1.8rem;"></div>', unsafe_allow_html=True)
+                # Bandeau téléchargement comptes — compact, au-dessus du tableau
                 with st.expander("Télécharger les comptes annuels d'une cible (Excel détaillé)", expanded=False):
                     st.markdown(
                         '<div style="color:#5C6478;font-size:0.85rem;margin-bottom:0.6rem;">'
