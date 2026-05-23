@@ -33,22 +33,13 @@ from src.inpi import (
 
 PROJECT_ROOT = Path(__file__).parent
 
-# Streamlit ignore les page_icon en chemin local sur certaines versions (sert son
-# propre favicon par défaut). On charge l'image en PIL et on la passe en objet —
-# ça force Streamlit à inliner notre favicon.
-def _load_favicon():
-    try:
-        from PIL import Image
-        path = PROJECT_ROOT / "assets" / "favicon-v3.png"
-        if path.exists():
-            return Image.open(path)
-    except Exception:
-        pass
-    return None
+# Favicon : URL stable via GitHub Pages — fonctionne en local et sur Streamlit Cloud
+# (le hack du favicon statique Streamlit n'est pas portable sur Cloud).
+FAVICON_URL = "https://cvholdings.github.io/sourcing-ma/assets/favicon-v3.png"
 
 st.set_page_config(
     page_title="Sourcing M&A",
-    page_icon=_load_favicon(),
+    page_icon=FAVICON_URL,
     layout="wide",
     initial_sidebar_state="expanded",
 )
