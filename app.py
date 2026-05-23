@@ -539,6 +539,32 @@ if page == "Lancer un screening":
             params["activite_principale"] = naf_norm
         if section_naf:
             params["section_activite_principale"] = section_naf
+
+        # Garde-fou volume : compter avant de lancer le pull complet (1 requête éclair)
+        try:
+            total_entreprises = client_gouv.count(params)
+        except Exception:
+            total_entreprises = None
+
+        if total_entreprises is not None:
+            duree_min = max(1, total_entreprises // 4000)  # ~4000 cibles/min avec parallélisation
+            if total_entreprises > 20000:
+                prog.empty()
+                log_area.empty()
+                st.error(
+                    f"❌ Recherche trop large : {total_entreprises:,} entreprises ".replace(",", " ") +
+                    f"({duree_min}+ min de traitement). "
+                    "Affinez votre recherche : ajoutez un filtre département/région ou "
+                    "passez en mode Code NAF précis."
+                )
+                st.stop()
+            elif total_entreprises > 5000:
+                st.info(
+                    f"ℹ Volume important détecté : **{total_entreprises:,}** entreprises ".replace(",", " ") +
+                    f"à traiter (durée estimée ~{duree_min} min grâce à la parallélisation). "
+                    "Le screening continue automatiquement. Ne rafraîchissez pas la page."
+                )
+
         # Cache_key adapté
         if section_naf:
             cache_key_base = f"section-{section_naf}"
@@ -582,17 +608,31 @@ if page == "Lancer un screening":
             st.error(f"Échec d'authentification INPI : {e}")
             st.stop()
 
-        # Échantillon 2 + 3 simultanés (lookup company + attachments)
+        # Échantillon 2 + 3 — lookup INPI parallélisé (gain 5-10× vs séquentiel)
         ech3_cibles = []
-        ech3_rejetees = []
         N = len(sp1_retenues)
-        for i, e in enumerate(sp1_retenues):
-            prog.progress(
-                30 + int(60 * i / max(N, 1)),
-                f"Lookup INPI {i+1}/{N} — {e.get('nom_complet', '')[:48]}",
-            )
-            siren = e["siren"]
-            company = client_inpi.get_company(siren, use_cache=True)
+        sirens = [e["siren"] for e in sp1_retenues]
+        siren_to_meta = {e["siren"]: e for e in sp1_retenues}
+
+        # Phase 1 : lookup companies en parallèle (10 threads)
+        log_area.markdown(
+            f'<div style="color:#5C6478;font-size:0.85rem;">Étape 2 sur 3 — '
+            f'lookup INPI parallèle sur {N} entités (10 threads simultanés).</div>',
+            unsafe_allow_html=True,
+        )
+        def _cb_companies(done, total, siren):
+            prog.progress(30 + int(30 * done / max(total, 1)),
+                          f"Lookup INPI {done}/{total}")
+        companies_all = client_inpi.enrich_batch_parallel(
+            sirens, use_cache=True, max_workers=10,
+            progress_callback=_cb_companies,
+        )
+
+        # Phase 2 : pré-filtre âge + indépendance (rapide, en mémoire)
+        sirens_pour_bilans = []
+        cibles_pre = {}
+        for siren in sirens:
+            company = companies_all.get(siren) or {}
             if company.get("_not_found") or company.get("_error"):
                 continue
             pp = extract_dirigeants_pp(company, exclure_cac=True)
@@ -602,23 +642,49 @@ if page == "Lancer un screening":
             age, plus_jeune = age_dirigeant_min(company)
             if age is None or age < age_min:
                 continue
-            att = get_attachments(client_inpi, siren, use_cache=True)
-            bilan_doc = latest_bilan(att)
+            sirens_pour_bilans.append(siren)
+            cibles_pre[siren] = {
+                "meta": siren_to_meta[siren],
+                "age": age,
+                "plus_jeune": plus_jeune,
+                "dirigeants_pp": pp,
+                "company_inpi": company,
+            }
+
+        # Phase 3 : récupération bilans en parallèle (uniquement sur les cibles pré-filtrées)
+        log_area.markdown(
+            f'<div style="color:#5C6478;font-size:0.85rem;">Étape 3 sur 3 — '
+            f'récupération bilans en parallèle sur {len(sirens_pour_bilans)} cibles '
+            f'(pré-filtrées sur âge ≥ {age_min} et indépendance).</div>',
+            unsafe_allow_html=True,
+        )
+        def _cb_bilans(done, total, siren):
+            prog.progress(60 + int(30 * done / max(total, 1)),
+                          f"Bilans {done}/{total}")
+        attachments_all = client_inpi.fetch_attachments_parallel(
+            sirens_pour_bilans, use_cache=True, max_workers=10,
+            progress_callback=_cb_bilans,
+        )
+
+        # Phase 4 : assemblage des cibles avec bilans
+        for siren in sirens_pour_bilans:
+            pre = cibles_pre[siren]
+            att = attachments_all.get(siren, {})
+            bilan_doc = latest_bilan(att) if att else None
             bilan_data = extract_bilan(bilan_doc) if bilan_doc else {}
             ratios = (
                 compute_ratios(bilan_data, multiple_ebe=float(multiple_ebe))
                 if bilan_data else {}
             )
-            # Âge du bilan retenu (proxy d'obsolescence)
             age_bilan = bilan_age_years(bilan_data) if bilan_data else None
             ech3_cibles.append({
-                "meta": e, "age": age, "plus_jeune": plus_jeune,
-                "dirigeants_pp": pp, "bilan": bilan_data, "ratios": ratios,
+                **pre,
+                "bilan": bilan_data,
+                "ratios": ratios,
                 "bilan_disponible": bool(bilan_doc),
                 "age_bilan": age_bilan,
                 "date_bilan": bilan_data.get("date_cloture") if bilan_data else None,
                 "attachments": att,
-                "company_inpi": company,  # pour filtre objet social post-screening
             })
 
         # Filtre additionnel : objet social

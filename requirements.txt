@@ -1,12 +1,14 @@
-pandas>=2.0
-openpyxl>=3.1
-requests>=2.31
-PyYAML>=6.0
-tqdm>=4.66
-lxml>=5.0
-rapidfuzz>=3.5
-python-dateutil>=2.8
-streamlit>=1.30
-plotly>=5.20
-Pillow>=10.0
-python-dotenv>=1.0
+# Dépendances pinned aux versions testées (audit 2026-05-23).
+# Streamlit Cloud rebuild = déterministe.
+pandas==3.0.3
+openpyxl==3.1.5
+requests==2.34.2
+PyYAML==6.0.3
+tqdm==4.67.3
+lxml==6.1.1
+RapidFuzz==3.14.5
+python-dateutil==2.9.0.post0
+streamlit==1.57.0
+plotly==6.7.0
+Pillow==12.2.0
+python-dotenv==1.2.2

@@ -27,6 +27,11 @@ from tqdm import tqdm
 
 BASE_URL = "https://registre-national-entreprises.inpi.fr/api"
 
+# Cache JWT au niveau module — évite les re-logins entre sessions Streamlit
+# JWT INPI valide ~1h ; on cache 50 min pour garder une marge de sécurité.
+_JWT_CACHE: dict[tuple, tuple] = {}  # {(user, pw_hash): (token, timestamp)}
+_JWT_TTL_SECONDS = 3000  # 50 min
+
 # Mapping des codes RNE roleEntreprise → libellé + catégorisation.
 # Mapping établi après audit empirique sur ~307 entreprises NAF 4669B :
 #   - codes 71 et 72 majoritairement personnes morales (= cabinets d'audit) = CAC
@@ -102,7 +107,24 @@ class INPIClient:
         self._token_obtained_at: float = 0.0
 
     def _login(self) -> str:
-        """POST /sso/login, renvoie le JWT."""
+        """POST /sso/login, renvoie le JWT.
+
+        Utilise un cache module-level (TTL 50 min) pour éviter les re-logins
+        entre instanciations (utile sur Streamlit Cloud où une session peut
+        reprendre rapidement après un redémarrage).
+        """
+        import hashlib
+        cache_key = (self.username,
+                     hashlib.sha256(self.password.encode()).hexdigest()[:16])
+        now = time.time()
+        cached = _JWT_CACHE.get(cache_key)
+        if cached and (now - cached[1]) < _JWT_TTL_SECONDS:
+            token = cached[0]
+            self._token = token
+            self._token_obtained_at = cached[1]
+            self.session.headers["Authorization"] = f"Bearer {token}"
+            return token
+
         url = f"{BASE_URL}/sso/login"
         r = self.session.post(
             url,
@@ -119,8 +141,9 @@ class INPIClient:
         if not token:
             raise RuntimeError(f"JWT introuvable dans la réponse: {data}")
         self._token = token
-        self._token_obtained_at = time.time()
+        self._token_obtained_at = now
         self.session.headers["Authorization"] = f"Bearer {token}"
+        _JWT_CACHE[cache_key] = (token, now)
         return token
 
     def ensure_token(self, max_age_sec: int = 3000) -> None:
@@ -155,13 +178,87 @@ class INPIClient:
         return data
 
     def enrich_batch(self, sirens: list[str], use_cache: bool = True) -> dict[str, dict]:
-        """Boucle sur la liste, renvoie {siren: data}."""
+        """Lookup séquentiel. Garde pour compatibilité ; préférer enrich_batch_parallel."""
         results: dict[str, dict] = {}
         for s in tqdm(sirens, desc="INPI lookup", unit="SIREN"):
             try:
                 results[s] = self.get_company(s, use_cache=use_cache)
             except Exception as e:
                 results[s] = {"_error": str(e), "siren": s}
+        return results
+
+    def enrich_batch_parallel(
+        self,
+        sirens: list[str],
+        use_cache: bool = True,
+        max_workers: int = 10,
+        progress_callback=None,
+    ) -> dict[str, dict]:
+        """Lookup INPI parallèle via ThreadPoolExecutor.
+
+        Performance : ~5-10× plus rapide que enrich_batch séquentiel sur des
+        listes > 100 SIREN. requests.Session est thread-safe pour les GET.
+
+        Args:
+            sirens : liste de SIREN à interroger
+            use_cache : utiliser le cache disque local si dispo
+            max_workers : nombre de threads simultanés (10 = compromis vitesse/rate-limit)
+            progress_callback : fonction (done, total, current_siren) appelée à chaque résultat
+
+        Returns:
+            dict {siren: data_or_error}
+        """
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        # Authentification AVANT de paralléliser (le token est partagé entre threads)
+        self.ensure_token()
+
+        results: dict[str, dict] = {}
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_siren = {
+                executor.submit(self.get_company, s, use_cache): s
+                for s in sirens
+            }
+            done = 0
+            for future in as_completed(future_to_siren):
+                siren = future_to_siren[future]
+                try:
+                    results[siren] = future.result()
+                except Exception as e:
+                    results[siren] = {"_error": str(e), "siren": siren}
+                done += 1
+                if progress_callback:
+                    progress_callback(done, len(sirens), siren)
+        return results
+
+    def fetch_attachments_parallel(
+        self,
+        sirens: list[str],
+        use_cache: bool = True,
+        max_workers: int = 10,
+        progress_callback=None,
+    ) -> dict[str, dict]:
+        """Récupération parallèle des attachments (bilans saisis) pour une liste de SIREN."""
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        self.ensure_token()
+        results: dict[str, dict] = {}
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_siren = {
+                executor.submit(get_attachments, self, s, use_cache): s
+                for s in sirens
+            }
+            done = 0
+            for future in as_completed(future_to_siren):
+                siren = future_to_siren[future]
+                try:
+                    results[siren] = future.result()
+                except Exception as e:
+                    results[siren] = {"_error": str(e), "siren": siren,
+                                      "actes": [], "bilans": [], "bilansSaisis": []}
+                done += 1
+                if progress_callback:
+                    progress_callback(done, len(sirens), siren)
         return results
 
 
@@ -392,7 +489,7 @@ def extract_bilan(bilan_saisi_doc: dict) -> dict:
                 by_page_code[(num, code)] = liasse
 
     type_bilan = identite.get("codeTypeBilan", "C")
-    if type_bilan in ("S", "K"):
+    if type_bilan == "S":
         codes_map = LIASSE_SIMPLIFIE_CODES
         page_col = LIASSE_PAGE_COL_N_SIMPLIFIE
     else:
@@ -456,7 +553,7 @@ def compute_ratios(bilan: dict, multiple_ebe: float = 4.0, decote_illiq: float =
     """
     type_bilan = bilan.get("code_type_bilan", "C")
 
-    if type_bilan in ("S", "K"):
+    if type_bilan == "S":
         # Régime simplifié 2033 — CA reconstitué depuis composantes (210+214+218)
         # car le code 232 sur 2033-B = "Total produits d'exploitation", PAS le CA net seul.
         ca_composantes = sum(filter(None, [

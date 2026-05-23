@@ -1,4 +1,14 @@
-"""CLI principale du module Sourcing M&A."""
+"""CLI principale du module Sourcing M&A.
+
+⚠ LEGACY (désynchronisée avec app.py)
+   Cette CLI ne supporte que l'échantillon 1 (population brute + filtres tranche 1).
+   Pour le pipeline complet (échantillons 2 et 3 INPI, filtres géo, carte,
+   recherche par section ou objet social), utiliser l'application Streamlit :
+
+       .venv/bin/streamlit run app.py
+
+   Maintenue pour les usages batch automatisés et la rétrocompatibilité.
+"""
 from __future__ import annotations
 
 import argparse

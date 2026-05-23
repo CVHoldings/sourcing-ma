@@ -47,6 +47,15 @@ class APIGouvClient:
             ),
         })
 
+    def count(self, params: dict) -> int:
+        """Renvoie le nombre total d'entreprises correspondant aux params,
+        sans paginer (1 seule requête, instantané).
+
+        Utile pour un garde-fou volume avant un pull complet.
+        """
+        resp = self._get({**params, "per_page": 1, "page": 1})
+        return resp.get("total_results", 0)
+
     def search(self, params: dict, cache_key: str | None = None) -> list[dict]:
         """Pagination automatique sur /search. Renvoie la liste complète des résultats."""
         cache_path = self.cache_dir / f"{cache_key}.json" if cache_key else None
