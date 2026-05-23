@@ -131,15 +131,10 @@ DEPARTEMENTS_FR = {
     "972": "Martinique (972)",
     "973": "Guyane (973)",
     "974": "La Réunion (974)",
+    "975": "Saint-Pierre-et-Miquelon (975)",
     "976": "Mayotte (976)",
-}
-
-# Mapping département → région (pour cohérence)
-DEPT_TO_REGION = {
-    "75": "11", "77": "11", "78": "11", "91": "11", "92": "11", "93": "11", "94": "11", "95": "11",  # Île-de-France
-    "13": "93", "83": "93", "84": "93", "04": "93", "05": "93", "06": "93",  # PACA
-    "2A": "94", "2B": "94",  # Corse
-    # ... (mapping complet trop long, on s'appuie sur le champ siege.region de l'API)
+    "977": "Saint-Barthélemy (977)",
+    "978": "Saint-Martin (978)",
 }
 
 

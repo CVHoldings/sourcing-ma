@@ -267,7 +267,8 @@ def get_attachments(client: "INPIClient", siren: str, use_cache: bool = True) ->
 #     - Page 1 (Bilan 2033-A)           → m3 = NET N
 #     - Page 2 (Compte de résultat 2033-B) → m3 = N
 LIASSE_PAGE_COL_N_NORMAL = {1: "m3", 2: "m1", 3: "m3", 4: "m1", 5: "m3"}
-LIASSE_PAGE_COL_N_SIMPLIFIE = {1: "m3", 2: "m3"}
+# Régime simplifié 2033 : page 1 = bilan (m3 = Net N), page 2 = CR (m1 = N, m3 vide)
+LIASSE_PAGE_COL_N_SIMPLIFIE = {1: "m3", 2: "m1"}
 
 # Mapping pour régime normal — codes vérifiés sur CERFA 2050-2053 officiels
 LIASSE_NORMAL_CODES = {
@@ -456,8 +457,15 @@ def compute_ratios(bilan: dict, multiple_ebe: float = 4.0, decote_illiq: float =
     type_bilan = bilan.get("code_type_bilan", "C")
 
     if type_bilan in ("S", "K"):
-        # Régime simplifié 2033
-        ca = bilan.get("ca_net")
+        # Régime simplifié 2033 — CA reconstitué depuis composantes (210+214+218)
+        # car le code 232 sur 2033-B = "Total produits d'exploitation", PAS le CA net seul.
+        ca_composantes = sum(filter(None, [
+            bilan.get("ventes_marchandises_total"),       # code 210
+            bilan.get("production_vendue_biens"),         # code 214
+            bilan.get("production_services_total"),       # code 218
+        ])) or None
+        # Si aucune composante détaillée, fallback sur code 232 (total produits expl, légère surestimation)
+        ca = ca_composantes or bilan.get("ca_net")
         rex = bilan.get("rex")
         dap = sum(filter(None, [
             bilan.get("dap_amortissements"),
@@ -469,9 +477,11 @@ def compute_ratios(bilan: dict, multiple_ebe: float = 4.0, decote_illiq: float =
         emprunts = bilan.get("emprunts_credits")
         dispo = bilan.get("disponibilites") or bilan.get("VMP")
     else:
-        # Régime normal 2050-2053
-        # CA = ca_net (FJ) en priorité, fallback total_produits_exploitation (FR)
-        ca = bilan.get("ca_net") or bilan.get("total_produits_exploitation")
+        # Régime normal 2050-2053 — CA = ca_net (FJ) UNIQUEMENT.
+        # Pas de fallback sur FR (total produits expl) car FR inclut subventions +
+        # reprises + autres produits → gonfle artificiellement le CA et dilue la marge.
+        # Si FJ est absent, on retourne None et la cible passe en "données partielles".
+        ca = bilan.get("ca_net")
         rex = bilan.get("rex")
         # DAP totales = amortissements + provisions immo + ac + r&c
         dap = sum(filter(None, [
@@ -675,14 +685,15 @@ def _apply_structure_styles(ws, lignes_struct, col_data_start: int) -> None:
                 cell.number_format = FORMAT_EURO
 
 
-def generate_comptes_excel_bytes(siren: str, attachments: dict, denomination: str = "") -> bytes:
+def generate_comptes_excel_bytes(siren: str, attachments: dict, denomination: str = "",
+                                  multiple_ebe: float = 4.0, decote_illiq: float = 0.20) -> bytes:
     """Génère un classeur Excel multi-exercices des comptes annuels d'une entreprise.
 
     Onglets : Identité, Compte de résultat, Bilan — Actif, Bilan — Passif,
     Synthèse pluriannuelle, Ratios, Codes liasse détaillés.
 
-    Format monétaire € (séparateurs FR), mise en forme finance pro :
-    sections en gras italique, totaux en gras, lignes clés (REX, RN, Total bilan) en navy.
+    Le multiple EBE et la décote d'illiquidité utilisés sont les mêmes que ceux
+    choisis dans l'UI de screening (pas de valeur hardcodée).
     """
     import io
     import pandas as pd
@@ -716,7 +727,7 @@ def generate_comptes_excel_bytes(siren: str, attachments: dict, denomination: st
     exercices = []
     for b in bilans[:6]:  # 6 derniers exercices max
         bilan = extract_bilan(b)
-        ratios = compute_ratios(bilan)
+        ratios = compute_ratios(bilan, multiple_ebe=multiple_ebe, decote_illiq=decote_illiq)
         date_cl = bilan.get("date_cloture") or "?"
         exercices.append({
             "date": date_cl,
@@ -788,7 +799,7 @@ def generate_comptes_excel_bytes(siren: str, attachments: dict, denomination: st
             "Marge EBE (%)": (marge * 100) if marge is not None else None,
             "Gearing (dette nette / EBE)": ex["ratios"].get("gearing"),
             "Autonomie financière (%)": (autonomie * 100) if autonomie is not None else None,
-            "Valorisation proxy (4× EBE × 80 %)": ex["ratios"].get("valo_proxy"),
+            f"Valorisation proxy ({multiple_ebe:g}× EBE × {(1-decote_illiq)*100:g} %)": ex["ratios"].get("valo_proxy"),
         }
     df_ratios = pd.DataFrame(ratios_rows)
 
@@ -858,11 +869,12 @@ def generate_comptes_excel_bytes(siren: str, attachments: dict, denomination: st
     # Format Ratios : mapping explicite poste → format pour éviter les ambiguïtés
     # (ex. "Valorisation proxy (4× EBE × 80 %)" contient "%" dans son libellé mais
     # la valeur est monétaire, pas un pourcentage).
+    valo_label = f"Valorisation proxy ({multiple_ebe:g}× EBE × {(1-decote_illiq)*100:g} %)"
     RATIOS_FORMATS = {
         "Marge EBE (%)": FORMAT_PCT,
         "Gearing (dette nette / EBE)": FORMAT_RATIO,
         "Autonomie financière (%)": FORMAT_PCT,
-        "Valorisation proxy (4× EBE × 80 %)": FORMAT_EURO,
+        valo_label: FORMAT_EURO,
     }
     if "Ratios" in wb.sheetnames:
         ws = wb["Ratios"]

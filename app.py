@@ -17,6 +17,7 @@ import streamlit as st
 from src.api_gouv import APIGouvClient, codes_tranche_effectif
 from src.filtres import appliquer_filtres_tranche1
 from src.geo_fr import REGIONS_FR, DEPARTEMENTS_FR, filter_entreprises_par_geo
+from src.naf_sections import NAF_SECTIONS, extract_objet_social, filter_par_objet_social
 from src.inpi import (
     INPIClient,
     load_credentials_from_env,
@@ -28,7 +29,11 @@ from src.inpi import (
     extract_bilan,
     compute_ratios,
     generate_comptes_excel_bytes,
+    bilan_age_years,
 )
+
+# Bilans > N ans = obsolescence à signaler dans l'UI
+BILAN_AGE_ALERT_YEARS = 3
 
 
 PROJECT_ROOT = Path(__file__).parent
@@ -361,29 +366,49 @@ if page == "Lancer un screening":
         st.markdown("### Secteur et géographie")
 
         mode_recherche = st.radio(
-            "Recherche par",
-            ["Code NAF", "Mots-clés d'activité"],
-            horizontal=True,
-            help="Code NAF si vous connaissez la nomenclature INSEE. Sinon mots-clés "
-                 "(comme sur Pappers) : la recherche porte sur la dénomination "
-                 "et le libellé d'activité.",
+            "Recherche par activité",
+            ["Section NAF (large)", "Code NAF (précis)", "Code NAF + objet social (très précis)"],
+            index=1,  # Code NAF par défaut
+            help="Section NAF = filtre large (21 sections A à U). Code NAF = filtre précis "
+                 "(~730 codes). Code NAF + objet social = ajoute un filtre sur le texte de "
+                 "l'objet social déclaré aux statuts (récupéré via INPI).",
         )
         naf = ""
-        keywords = ""
-        if mode_recherche == "Code NAF":
+        section_naf = ""
+        objet_social_kw = ""
+
+        if mode_recherche == "Section NAF (large)":
+            section_options = list(NAF_SECTIONS.keys())
+            section_naf = st.selectbox(
+                "Section NAF",
+                section_options,
+                format_func=lambda c: f"{c} — {NAF_SECTIONS[c]}",
+                index=section_options.index("G"),  # défaut sur Commerce
+            )
+        elif mode_recherche == "Code NAF (précis)":
             naf = st.text_input(
                 "Code NAF",
                 value="4669B",
-                help="Format 4669B ou 46.69B (exemple : 4669B = commerce de gros, "
-                     "équipements industriels divers).",
+                help="Format 4669B ou 46.69B (ex. 4669B = commerce de gros, équipements industriels).",
             )
-        else:
-            keywords = st.text_input(
-                "Mots-clés d'activité",
+        else:  # Code NAF + objet social
+            naf = st.text_input(
+                "Code NAF",
+                value="4669B",
+                help="Code NAF de base pour cadrer la recherche.",
+            )
+            objet_social_kw = st.text_input(
+                "Filtre objet social (mots-clés)",
                 value="",
-                placeholder="ex. maintenance industrielle, transmission mécanique...",
-                help="Cherche dans la dénomination des entreprises et le libellé "
-                     "de leur activité. Plusieurs mots-clés possibles.",
+                placeholder="ex. transmission mécanique, hydraulique, maintenance...",
+                help="Mots-clés cherchés dans le texte de l'objet social INPI. "
+                     "Filtre post-screening tolérant : si l'INPI n'expose pas l'objet "
+                     "(cas fréquent), la cible est conservée avec un marquage 'objet inconnu'.",
+            )
+            st.caption(
+                "ℹ Note : l'API INPI ne renvoie pas systématiquement l'objet social complet "
+                "(il faut souvent télécharger les statuts). Le filtre est appliqué quand "
+                "l'objet est disponible, sinon la cible est conservée et marquée."
             )
 
         effectif_min = st.number_input("Effectif minimum (salariés)", min_value=0, max_value=10000, value=10)
@@ -462,12 +487,14 @@ if page == "Lancer un screening":
 
     st.markdown('<hr>', unsafe_allow_html=True)
     # Nom du run par défaut : varie selon mode de recherche
-    if mode_recherche == "Code NAF" and naf:
+    if section_naf:
+        suffixe = f"section-{section_naf}"
+    elif naf:
         suffixe = f"NAF-{naf.replace('.', '').upper()}"
-    elif keywords:
-        suffixe = "kw-" + "_".join(keywords.split()[:3]).lower()[:40]
     else:
         suffixe = "screening"
+    if objet_social_kw:
+        suffixe += "_objet-" + "_".join(objet_social_kw.split()[:2]).lower()[:30]
     nom_run = st.text_input(
         "Nom du run (dossier de sortie)",
         value=f"{date.today().isoformat()}_{suffixe}",
@@ -476,11 +503,11 @@ if page == "Lancer un screening":
 
     if lance:
         # Validation : au moins un critère de recherche renseigné
-        if mode_recherche == "Code NAF" and not naf.strip():
-            st.error("Veuillez saisir un code NAF.")
+        if mode_recherche == "Section NAF (large)" and not section_naf:
+            st.error("Veuillez sélectionner une section NAF.")
             st.stop()
-        if mode_recherche == "Mots-clés d'activité" and not keywords.strip():
-            st.error("Veuillez saisir au moins un mot-clé d'activité.")
+        if mode_recherche in ("Code NAF (précis)", "Code NAF + objet social (très précis)") and not naf.strip():
+            st.error("Veuillez saisir un code NAF.")
             st.stop()
 
         run_dir = PROJECT_ROOT / "runs" / nom_run
@@ -491,8 +518,11 @@ if page == "Lancer un screening":
         prog = st.progress(0, "Préparation")
         log_area = st.empty()
 
-        # Échantillon 1 — pull API gouv (NAF ou mots-clés)
-        critere_label = f"NAF {naf_norm}" if naf_norm else f"mots-clés « {keywords} »"
+        # Échantillon 1 — pull API gouv (section NAF ou code NAF)
+        if section_naf:
+            critere_label = f"section {section_naf} ({NAF_SECTIONS[section_naf]})"
+        else:
+            critere_label = f"NAF {naf_norm}"
         log_area.markdown(
             f'<div style="color:#5C6478;font-size:0.85rem;">Étape 1 sur 3 — '
             f'récupération API gouv ({critere_label}, effectif {effectif_min}-{effectif_max}).</div>',
@@ -507,11 +537,13 @@ if page == "Lancer un screening":
         }
         if naf_norm:
             params["activite_principale"] = naf_norm
-        if keywords.strip():
-            params["q"] = keywords.strip()
-        # Cache_key : varie selon NAF ou mots-clés
-        cache_key_base = (f"NAF-{naf_norm.replace('.','')}"
-                          if naf_norm else f"kw-{keywords.strip().replace(' ','_').lower()[:40]}")
+        if section_naf:
+            params["section_activite_principale"] = section_naf
+        # Cache_key adapté
+        if section_naf:
+            cache_key_base = f"section-{section_naf}"
+        else:
+            cache_key_base = f"NAF-{naf_norm.replace('.','')}"
         cache_key = f"{cache_key_base}_eff-{effectif_min}-{effectif_max}"
         entreprises = client_gouv.search(params, cache_key=cache_key)
 
@@ -577,12 +609,27 @@ if page == "Lancer un screening":
                 compute_ratios(bilan_data, multiple_ebe=float(multiple_ebe))
                 if bilan_data else {}
             )
+            # Âge du bilan retenu (proxy d'obsolescence)
+            age_bilan = bilan_age_years(bilan_data) if bilan_data else None
             ech3_cibles.append({
                 "meta": e, "age": age, "plus_jeune": plus_jeune,
                 "dirigeants_pp": pp, "bilan": bilan_data, "ratios": ratios,
                 "bilan_disponible": bool(bilan_doc),
+                "age_bilan": age_bilan,
+                "date_bilan": bilan_data.get("date_cloture") if bilan_data else None,
                 "attachments": att,
+                "company_inpi": company,  # pour filtre objet social post-screening
             })
+
+        # Filtre additionnel : objet social
+        if objet_social_kw.strip():
+            avant_objet = len(ech3_cibles)
+            ech3_cibles = filter_par_objet_social(ech3_cibles, objet_social_kw)
+            log_area.markdown(
+                f'<div style="color:#5C6478;font-size:0.85rem;">Filtre objet social '
+                f'« {objet_social_kw} » : {avant_objet} → {len(ech3_cibles)} cibles.</div>',
+                unsafe_allow_html=True,
+            )
 
         prog.progress(90)
         log_area.markdown(
@@ -699,8 +746,12 @@ if page == "Lancer un screening":
                             c_dl = options_top[choix_top]
                             siren_dl = c_dl["meta"]["siren"]
                             denom_dl = c_dl["meta"].get("nom_complet", "")
+                            # Multiple EBE et décote du run en cours (cohérence Excel/UI)
+                            params_run = lr.get("params", {})
                             excel_bytes_top = generate_comptes_excel_bytes(
                                 siren_dl, c_dl["attachments"], denomination=denom_dl,
+                                multiple_ebe=float(params_run.get("multiple_ebe", 4.0)),
+                                decote_illiq=0.20,
                             )
                             st.download_button(
                                 "Télécharger Excel",
@@ -718,6 +769,10 @@ if page == "Lancer un screening":
                     siege = meta.get("siege") or {}
                     siren = meta["siren"]
                     marge = r.get("marge_ebe")
+                    # Marqueur obsolescence du bilan (alerte si > N ans)
+                    age_b = c.get("age_bilan")
+                    date_b = c.get("date_bilan") or ""
+                    flag_obsolete = "⚠ " if (age_b is not None and age_b > BILAN_AGE_ALERT_YEARS) else ""
                     rows.append({
                         "SIREN": siren,
                         "Dénomination": meta.get("nom_complet"),
@@ -726,6 +781,8 @@ if page == "Lancer un screening":
                         "Âge dir.": c["age"],
                         "Dirigeant principal": c["plus_jeune"],
                         "Ancien.": meta.get("_anciennete"),
+                        "Bilan": f"{flag_obsolete}{date_b[:10]}" if date_b else "—",
+                        "Âge bilan": age_b,
                         "CA": r.get("ca"),
                         "EBE": r.get("ebe_proxy"),
                         "Marge EBE": marge * 100 if marge is not None else None,
@@ -734,9 +791,21 @@ if page == "Lancer un screening":
                         "Pappers": f"https://www.pappers.fr/entreprise/{siren}",
                     })
                 df = pd.DataFrame(rows).sort_values("Valo proxy", ascending=False, na_position="last")
+                # Alerte sur les bilans obsolètes
+                nb_obsolete = sum(1 for c in retenues
+                                  if c.get("age_bilan") is not None
+                                  and c.get("age_bilan") > BILAN_AGE_ALERT_YEARS)
+                if nb_obsolete:
+                    st.warning(
+                        f"⚠ {nb_obsolete} cible{'s' if nb_obsolete > 1 else ''} avec un "
+                        f"bilan datant de plus de {BILAN_AGE_ALERT_YEARS} ans (marquées ⚠ dans la "
+                        f"colonne « Bilan »). Les chiffres financiers ne sont plus représentatifs — "
+                        f"qualification manuelle requise via Pappers."
+                    )
                 st.dataframe(
                     df, hide_index=True, use_container_width=True,
                     column_config={
+                        "Âge bilan": st.column_config.NumberColumn("Âge bilan (ans)", format="%d"),
                         "CA": st.column_config.NumberColumn("CA (€)", format="%d"),
                         "EBE": st.column_config.NumberColumn("EBE (€)", format="%d"),
                         "Marge EBE": st.column_config.NumberColumn(format="%.1f %%"),
