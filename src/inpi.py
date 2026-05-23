@@ -855,20 +855,22 @@ def generate_comptes_excel_bytes(siren: str, attachments: dict, denomination: st
             for cell in row:
                 cell.number_format = FORMAT_EURO
 
-    # Format Ratios : ligne par ligne selon le poste
+    # Format Ratios : mapping explicite poste → format pour éviter les ambiguïtés
+    # (ex. "Valorisation proxy (4× EBE × 80 %)" contient "%" dans son libellé mais
+    # la valeur est monétaire, pas un pourcentage).
+    RATIOS_FORMATS = {
+        "Marge EBE (%)": FORMAT_PCT,
+        "Gearing (dette nette / EBE)": FORMAT_RATIO,
+        "Autonomie financière (%)": FORMAT_PCT,
+        "Valorisation proxy (4× EBE × 80 %, €)": FORMAT_EURO,
+    }
     if "Ratios" in wb.sheetnames:
         ws = wb["Ratios"]
-        # Lecture du libellé en colonne A pour appliquer le bon format
         for row_idx in range(2, ws.max_row + 1):
-            label = (ws.cell(row=row_idx, column=1).value or "").lower()
+            label = ws.cell(row=row_idx, column=1).value or ""
+            fmt = RATIOS_FORMATS.get(label, FORMAT_EURO)
             for c_idx in range(2, ws.max_column + 1):
-                cell = ws.cell(row=row_idx, column=c_idx)
-                if "%" in label:
-                    cell.number_format = FORMAT_PCT
-                elif "×" in label or "x" in label.split() or "gearing" in label:
-                    cell.number_format = FORMAT_RATIO
-                else:
-                    cell.number_format = FORMAT_EURO
+                ws.cell(row=row_idx, column=c_idx).number_format = fmt
 
     # Format Codes liasse détaillés : format monétaire
     if "Codes liasse détaillés" in wb.sheetnames:
