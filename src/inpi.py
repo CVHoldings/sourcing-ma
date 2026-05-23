@@ -109,9 +109,8 @@ class INPIClient:
     def _login(self) -> str:
         """POST /sso/login, renvoie le JWT.
 
-        Utilise un cache module-level (TTL 50 min) pour éviter les re-logins
-        entre instanciations (utile sur Streamlit Cloud où une session peut
-        reprendre rapidement après un redémarrage).
+        Utilise un cache module-level (TTL 50 min) + retry exponentiel pour
+        gérer les Connection refused / 429 (rate-limit INPI temporaire).
         """
         import hashlib
         cache_key = (self.username,
@@ -126,25 +125,50 @@ class INPIClient:
             return token
 
         url = f"{BASE_URL}/sso/login"
-        r = self.session.post(
-            url,
-            json={"username": self.username, "password": self.password},
-            timeout=30,
-            headers={"Content-Type": "application/json"},
+        last_error = None
+        for attempt in range(4):
+            try:
+                r = self.session.post(
+                    url,
+                    json={"username": self.username, "password": self.password},
+                    timeout=30,
+                    headers={"Content-Type": "application/json"},
+                )
+            except requests.exceptions.ConnectionError as e:
+                # Connection refused = rate-limit INPI ou indisponibilité réseau
+                last_error = e
+                wait = (2 ** attempt) * 3  # 3, 6, 12, 24 sec
+                time.sleep(wait)
+                continue
+
+            if r.status_code == 429 or r.status_code >= 500:
+                # Rate-limit ou erreur serveur → retry
+                last_error = RuntimeError(f"INPI {r.status_code}: {r.text[:200]}")
+                wait = (2 ** attempt) * 3
+                time.sleep(wait)
+                continue
+
+            if not r.ok:
+                # 4xx hors 429 → erreur définitive (credentials, etc.)
+                raise RuntimeError(
+                    f"Auth INPI échouée [{r.status_code}]: {r.text[:200]}"
+                )
+
+            data = r.json()
+            token = data.get("token") or r.headers.get("Authorization", "").removeprefix("Bearer ")
+            if not token:
+                raise RuntimeError(f"JWT introuvable dans la réponse: {data}")
+            self._token = token
+            self._token_obtained_at = now
+            self.session.headers["Authorization"] = f"Bearer {token}"
+            _JWT_CACHE[cache_key] = (token, now)
+            return token
+
+        raise RuntimeError(
+            f"Auth INPI impossible après 4 tentatives (dernière erreur : {last_error}). "
+            f"L'IP serveur a peut-être été temporairement rate-limitée par INPI. "
+            f"Réessayez dans 15-30 min."
         )
-        if not r.ok:
-            raise RuntimeError(
-                f"Auth INPI échouée [{r.status_code}]: {r.text[:200]}"
-            )
-        data = r.json()
-        token = data.get("token") or r.headers.get("Authorization", "").removeprefix("Bearer ")
-        if not token:
-            raise RuntimeError(f"JWT introuvable dans la réponse: {data}")
-        self._token = token
-        self._token_obtained_at = now
-        self.session.headers["Authorization"] = f"Bearer {token}"
-        _JWT_CACHE[cache_key] = (token, now)
-        return token
 
     def ensure_token(self, max_age_sec: int = 3000) -> None:
         """Rafraîchit le token s'il a > 50 min (durée JWT typique INPI = 1h)."""

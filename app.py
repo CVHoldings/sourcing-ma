@@ -632,7 +632,7 @@ if page == "Lancer un screening":
             prog.progress(30 + int(30 * done / max(total, 1)),
                           f"Lookup INPI {done}/{total}")
         companies_all = client_inpi.enrich_batch_parallel(
-            sirens, use_cache=True, max_workers=15,
+            sirens, use_cache=True, max_workers=8,
             progress_callback=_cb_companies,
         )
 
@@ -670,7 +670,7 @@ if page == "Lancer un screening":
             prog.progress(60 + int(30 * done / max(total, 1)),
                           f"Bilans {done}/{total}")
         attachments_all = client_inpi.fetch_attachments_parallel(
-            sirens_pour_bilans, use_cache=True, max_workers=15,
+            sirens_pour_bilans, use_cache=True, max_workers=8,
             progress_callback=_cb_bilans,
         )
 
