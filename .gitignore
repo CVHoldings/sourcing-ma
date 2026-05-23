@@ -1,0 +1,16 @@
+.venv/
+.env
+.env.*
+__pycache__/
+*.pyc
+data/cache_api/*.json
+data/cache_inpi/*
+.DS_Store
+*.swp
+runs/*/screening_resultats.xlsx
+runs/*/screening_echantillon_*.xlsx
+runs/*/raw_results.json
+runs/*/parametres.yaml
+.streamlit/secrets.toml
+/tmp/
+*.log

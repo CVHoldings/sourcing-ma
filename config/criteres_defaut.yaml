@@ -1,0 +1,64 @@
+# Critères de screening par défaut — surchargeables en CLI ou via UI
+# Cas pilote : NAF 4669B, négoce industriel, valo cible ≤ 2 M€
+
+screening:
+  naf: "46.69B"
+  geo:
+    perimetre: "france"          # france | regions | departements
+    regions: []                  # ex. ["11", "84"] (codes INSEE)
+    departements: []             # ex. ["75", "92", "69"]
+
+  taille:
+    effectif_min: 10             # tranche INSEE 12 = 10-19 salariés
+    effectif_max: 49             # tranche INSEE 22 = 20-49
+    # Codes INSEE tranches effectif :
+    # 00=0, 01=1-2, 02=3-5, 03=6-9, 11=10-19, 12=20-49,
+    # 21=50-99, 22=100-199, 31=200-249, 32=250-499, 41=500-999...
+
+  dirigeant:
+    age_min: 55                  # années
+    nationalite: null            # null = tous
+
+  financier:
+    ebe_marge_min: 0.08          # EBE / CA ≥ 8 %
+    gearing_max: 2.5             # Dette nette / EBE ≤ 2,5×
+    cap_remboursement_max: 5     # Dette nette / CAF ≤ 5 ans (alternatif)
+    autonomie_financiere_min: 0.20  # CP / Total bilan ≥ 20 %
+    valorisation_max_eur: 2_000_000
+    valorisation_multiple_ebe: 4    # proxy valo = X × EBE
+    valorisation_decote_illiquidite: 0.20  # 20 % décote PME non cotée
+
+  independance:
+    exclure_filiales_groupe: true        # aucune PM > 25 % dans le capital
+    tolerer_holdings_patrimoniales: true # SCI familiale du dirigeant OK
+    seuil_be_pm: 0.25                    # seuil légal BE = 25 %
+
+scoring:
+  # Pondérations pour le score composite final
+  poids_rentabilite: 0.30
+  poids_independance: 0.20
+  poids_age_dirigeant: 0.20      # plus le dirigeant est âgé, plus le score monte
+  poids_taille_dans_cible: 0.15  # cibles proches de la valo cible scorées haut
+  poids_endettement: 0.15        # moins endetté = mieux
+
+export:
+  excel:
+    onglets:
+      - top_cibles
+      - detail_cibles
+      - filtres_appliques
+      - cibles_rejetees
+      - glossaire
+    top_n: 50
+  formats_chiffres:
+    devise: "€"
+    materialite: "k€"            # k€ ou M€ pour les grandes valeurs
+
+api:
+  recherche_entreprises:
+    base_url: "https://recherche-entreprises.api.gouv.fr"
+    per_page: 25                 # max 25 selon doc API
+    rate_limit_pause_sec: 0.2    # courtoisie
+  inpi:
+    base_url: "https://data.inpi.fr"
+    cache_ttl_jours: 90          # comptes annuels stables, cache long
