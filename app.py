@@ -64,9 +64,22 @@ st.markdown("""
   --positive:#0F7A3A;
 }
 
-html, body, [class*="css"], [data-testid="stAppViewContainer"] *,
-.stMarkdown, .stMetric, .stTabs, .stButton, .stTextInput, .stNumberInput, .stSelectbox {
+html, body, [class*="stMarkdown"], [data-testid="stMetric"],
+.stTabs button, .stButton button, .stTextInput input, .stNumberInput input {
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+/* Préserver les fonts d'icônes Material UI utilisées par Streamlit
+   (sinon les noms d'icônes s'affichent en texte : "arrow_right", "_arrow_right"...) */
+[class*="material-icons"],
+[class*="MaterialIcons"],
+[class*="MuiIcon"],
+.material-symbols-outlined,
+.material-symbols-rounded,
+i.material-icons,
+[data-testid="stIconMaterial"] {
+  font-family: 'Material Icons', 'Material Symbols Outlined',
+               'Material Symbols Rounded' !important;
 }
 
 [data-testid="stAppViewContainer"] > .main {
