@@ -862,7 +862,7 @@ def generate_comptes_excel_bytes(siren: str, attachments: dict, denomination: st
         "Marge EBE (%)": FORMAT_PCT,
         "Gearing (dette nette / EBE)": FORMAT_RATIO,
         "Autonomie financière (%)": FORMAT_PCT,
-        "Valorisation proxy (4× EBE × 80 %, €)": FORMAT_EURO,
+        "Valorisation proxy (4× EBE × 80 %)": FORMAT_EURO,
     }
     if "Ratios" in wb.sheetnames:
         ws = wb["Ratios"]
