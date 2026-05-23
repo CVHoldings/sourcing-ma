@@ -35,7 +35,17 @@ class APIGouvClient:
         self.per_page = per_page
         self.pause_sec = pause_sec
         self.session = requests.Session()
-        self.session.headers.update({"Accept": "application/json"})
+        # User-Agent réaliste : certaines APIs publiques (dont recherche-entreprises
+        # depuis le datacenter Streamlit Cloud) refusent l'UA par défaut python-requests.
+        self.session.headers.update({
+            "Accept": "application/json",
+            "User-Agent": (
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/130.0.0.0 Safari/537.36 "
+                "SourcingMA/1.0 (contact: cvcapitalpartners@gmail.com)"
+            ),
+        })
 
     def search(self, params: dict, cache_key: str | None = None) -> list[dict]:
         """Pagination automatique sur /search. Renvoie la liste complète des résultats."""
@@ -65,7 +75,28 @@ class APIGouvClient:
         return all_results
 
     def _get(self, params: dict) -> dict:
+        """GET avec retry sur 429 (rate limit) et 5xx (erreurs serveur)."""
         url = f"{self.base_url}/search"
-        r = self.session.get(url, params=params, timeout=30)
-        r.raise_for_status()
-        return r.json()
+        last_status = None
+        for attempt in range(4):
+            r = self.session.get(url, params=params, timeout=30)
+            last_status = r.status_code
+            if r.ok:
+                return r.json()
+            # Retry sur 429 (rate limit) ou 5xx
+            if r.status_code == 429 or 500 <= r.status_code < 600:
+                wait = (2 ** attempt) * 1.5  # 1.5, 3, 6, 12 secondes
+                time.sleep(wait)
+                continue
+            # Pour les autres erreurs (4xx hors 429), on remonte avec le détail
+            try:
+                body = r.text[:300]
+            except Exception:
+                body = ""
+            raise requests.exceptions.HTTPError(
+                f"API gouv HTTP {r.status_code} sur params {params}. Body: {body}"
+            )
+        # Tous les retries épuisés
+        raise requests.exceptions.HTTPError(
+            f"API gouv : {last_status} après 4 tentatives. Paramètres : {params}"
+        )
