@@ -917,60 +917,6 @@ if page == "Lancer un screening":
                 st.info("Aucune cible rejetée sur les critères financiers.")
 
 
-# ─────────────────────────── Page : consulter un run ───────────────────────────
-elif page == "Consulter un run":
-    st.markdown("# Consulter un screening précédent")
-    st.markdown(
-        '<div class="subtitle">Sélectionnez un screening précédent et un échantillon '
-        "pour relire les classeurs.</div>",
-        unsafe_allow_html=True,
-    )
-    runs_dir = PROJECT_ROOT / "runs"
-    runs = sorted([d.name for d in runs_dir.glob("*") if d.is_dir()], reverse=True)
-    if not runs:
-        st.info("Aucun screening précédent trouvé. Lancez d'abord un screening.")
-    else:
-        # Libellés humains pour les classeurs
-        LIBELLES_CLASSEURS = {
-            "screening_echantillon_1.xlsx": "Échantillon 1 — Indépendance et ancienneté",
-            "screening_echantillon_2.xlsx": "Échantillon 2 — Âge du dirigeant",
-            "screening_echantillon_3.xlsx": "Échantillon 3 — Qualification financière",
-            "screening_resultats.xlsx": "Résultats (format historique)",
-        }
-
-        col_run, col_classeur = st.columns([1, 2])
-        with col_run:
-            st.markdown('<div class="caption-meta">Screening</div>', unsafe_allow_html=True)
-            run = st.selectbox("Screening", runs, label_visibility="collapsed")
-
-        run_path = runs_dir / run
-        xlsx_files = sorted(run_path.glob("*.xlsx"))
-
-        if not xlsx_files:
-            st.warning("Aucun classeur Excel dans ce screening.")
-        else:
-            options_classeur = {
-                LIBELLES_CLASSEURS.get(f.name, f.name): f for f in xlsx_files
-            }
-            with col_classeur:
-                st.markdown('<div class="caption-meta">Échantillon à consulter</div>',
-                            unsafe_allow_html=True)
-                choix = st.selectbox("Échantillon", list(options_classeur.keys()),
-                                     label_visibility="collapsed")
-            xlsx = options_classeur[choix]
-
-            st.markdown('<hr style="margin:1.2rem 0;">', unsafe_allow_html=True)
-            try:
-                sheets = pd.ExcelFile(xlsx).sheet_names
-                tab_objs = st.tabs(sheets)
-                for tab, sheet in zip(tab_objs, sheets):
-                    with tab:
-                        df = pd.read_excel(xlsx, sheet_name=sheet)
-                        st.dataframe(df, hide_index=True, use_container_width=True)
-            except Exception as e:
-                st.error(f"Erreur de lecture {xlsx.name} : {e}")
-
-
 # ─────────────────────────── Page : à propos ───────────────────────────
 else:
     st.markdown("# À propos")
