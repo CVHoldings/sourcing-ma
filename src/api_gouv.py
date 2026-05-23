@@ -56,24 +56,57 @@ class APIGouvClient:
         resp = self._get({**params, "per_page": 1, "page": 1})
         return resp.get("total_results", 0)
 
-    def search(self, params: dict, cache_key: str | None = None) -> list[dict]:
-        """Pagination automatique sur /search. Renvoie la liste complète des résultats."""
+    def search(self, params: dict, cache_key: str | None = None,
+               max_workers: int = 8, progress_callback=None) -> list[dict]:
+        """Pagination parallélisée sur /search. Renvoie la liste complète des résultats.
+
+        Args:
+            params : params API (activite_principale, etc.)
+            cache_key : clé de cache disque
+            max_workers : nombre de pages chargées en parallèle (défaut 8, max API gouv = 10 req/s)
+            progress_callback : fonction (done, total) appelée à chaque page complétée
+        """
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
         cache_path = self.cache_dir / f"{cache_key}.json" if cache_key else None
         if cache_path and cache_path.exists():
             return json.loads(cache_path.read_text(encoding="utf-8"))
 
-        query = {**params, "per_page": self.per_page, "page": 1}
-        first = self._get(query)
+        # 1) Premier appel pour connaître total_pages
+        query_base = {**params, "per_page": self.per_page}
+        first = self._get({**query_base, "page": 1})
         total_pages = first.get("total_pages", 1)
-        total_results = first.get("total_results", 0)
         all_results: list[dict] = list(first.get("results", []))
 
+        if progress_callback:
+            progress_callback(1, total_pages)
+
+        # 2) Pages 2..N en parallèle
         if total_pages > 1:
-            for page in tqdm(range(2, total_pages + 1), desc=f"NAF {params.get('activite_principale')}", unit="page"):
-                time.sleep(self.pause_sec)
-                query["page"] = page
-                resp = self._get(query)
-                all_results.extend(resp.get("results", []))
+            def _fetch_page(page_num: int):
+                return self._get({**query_base, "page": page_num})
+
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = {
+                    executor.submit(_fetch_page, p): p
+                    for p in range(2, total_pages + 1)
+                }
+                done = 1
+                # Pré-allouer la liste pour respecter l'ordre des pages
+                pages_results = {1: first.get("results", [])}
+                for future in as_completed(futures):
+                    page_num = futures[future]
+                    try:
+                        pages_results[page_num] = future.result().get("results", [])
+                    except Exception:
+                        pages_results[page_num] = []
+                    done += 1
+                    if progress_callback:
+                        progress_callback(done, total_pages)
+                # Réassembler dans l'ordre
+                all_results = []
+                for p in sorted(pages_results.keys()):
+                    all_results.extend(pages_results[p])
 
         if cache_path:
             cache_path.write_text(

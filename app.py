@@ -571,7 +571,15 @@ if page == "Lancer un screening":
         else:
             cache_key_base = f"NAF-{naf_norm.replace('.','')}"
         cache_key = f"{cache_key_base}_eff-{effectif_min}-{effectif_max}"
-        entreprises = client_gouv.search(params, cache_key=cache_key)
+
+        # Callback de progression sur le pull API gouv (parallélisé)
+        def _cb_pages(done, total):
+            prog.progress(int(20 * done / max(total, 1)),
+                          f"Pull API gouv : page {done}/{total}")
+
+        entreprises = client_gouv.search(params, cache_key=cache_key,
+                                          max_workers=8,
+                                          progress_callback=_cb_pages)
 
         # Filtre géographique post-API (côté Python)
         if mode_geo == "Une ou plusieurs régions" and regions_choisies:
@@ -624,7 +632,7 @@ if page == "Lancer un screening":
             prog.progress(30 + int(30 * done / max(total, 1)),
                           f"Lookup INPI {done}/{total}")
         companies_all = client_inpi.enrich_batch_parallel(
-            sirens, use_cache=True, max_workers=10,
+            sirens, use_cache=True, max_workers=15,
             progress_callback=_cb_companies,
         )
 
@@ -662,7 +670,7 @@ if page == "Lancer un screening":
             prog.progress(60 + int(30 * done / max(total, 1)),
                           f"Bilans {done}/{total}")
         attachments_all = client_inpi.fetch_attachments_parallel(
-            sirens_pour_bilans, use_cache=True, max_workers=10,
+            sirens_pour_bilans, use_cache=True, max_workers=15,
             progress_callback=_cb_bilans,
         )
 

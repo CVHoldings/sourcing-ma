@@ -191,18 +191,18 @@ class INPIClient:
         self,
         sirens: list[str],
         use_cache: bool = True,
-        max_workers: int = 10,
+        max_workers: int = 15,
         progress_callback=None,
     ) -> dict[str, dict]:
         """Lookup INPI parallèle via ThreadPoolExecutor.
 
-        Performance : ~5-10× plus rapide que enrich_batch séquentiel sur des
+        Performance : ~10-15× plus rapide que enrich_batch séquentiel sur des
         listes > 100 SIREN. requests.Session est thread-safe pour les GET.
 
         Args:
             sirens : liste de SIREN à interroger
             use_cache : utiliser le cache disque local si dispo
-            max_workers : nombre de threads simultanés (10 = compromis vitesse/rate-limit)
+            max_workers : nombre de threads simultanés (15 = bon compromis ; 20+ = risque 429)
             progress_callback : fonction (done, total, current_siren) appelée à chaque résultat
 
         Returns:
@@ -235,7 +235,7 @@ class INPIClient:
         self,
         sirens: list[str],
         use_cache: bool = True,
-        max_workers: int = 10,
+        max_workers: int = 15,
         progress_callback=None,
     ) -> dict[str, dict]:
         """Récupération parallèle des attachments (bilans saisis) pour une liste de SIREN."""
